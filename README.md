@@ -10,8 +10,33 @@
 
 ## 构建
 
+本地编译 `linux/amd64`：
+
 ```bash
 go build -o rtp-proxy-linux-amd64 .
+```
+
+本地交叉编译：
+
+```bash
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o rtp-proxy-linux-amd64 .
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o rtp-proxy-linux-arm64 .
+```
+
+## GitHub Actions
+
+- 工作流文件：`.github/workflows/build-release.yml`
+- 手动编译：在 GitHub 仓库的 `Actions` 页面运行 `Build Release Artifacts`
+- 自动编译：每次新建并发布 Release 后，Actions 会自动构建并上传以下文件到 Release：
+  - `rtp-proxy-linux-amd64.tar.gz`
+  - `rtp-proxy-linux-arm64.tar.gz`
+  - `sha256sums.txt`
+
+下载 Release 后解压示例：
+
+```bash
+tar -xzf rtp-proxy-linux-amd64.tar.gz
+chmod +x rtp-proxy-linux-amd64
 ```
 
 ## 运行
@@ -55,8 +80,11 @@ UDP：
 
 ## 设计说明
 
-- 外层链路为 UDP，每个隧道包都带标准 12 字节 RTP 风格头
-- 使用 90kHz RTP 时钟、20ms 时间戳步进
-- 握手使用临时 ECDH，业务帧使用 AEAD 加密
-- TCP 流按分片封装进可靠帧中传输
-- UDP 数据报按独立数据报封装，不做 TCP 化
+- 外层链路为 UDP，隧道数据统一封装成 RTP 风格数据包，保留 `V=2 / PT / sequence / timestamp / SSRC` 等头部特征
+- RTP 时间戳使用 `90kHz` 时钟，按 `20ms` 步进推进；小包会使用 RTP padding 补齐，尽量保持更稳定的包形态
+- 握手阶段使用临时 `ECDH(P-256)` 交换密钥，再通过 `HKDF-SHA256` 派生会话密钥
+- 握手完成后，所有业务帧都使用 `AES-GCM` 加密传输，不明文传输代理内容
+- TCP 代理数据在 UDP 隧道上走一层自定义可靠传输，带连接级 `ACK` 位图、快速重传和超时重传
+- UDP 代理走 `SOCKS5 UDP ASSOCIATE`，保持数据报语义，不把 UDP 强行 TCP 化
+- UDP 数据报额外带冗余双发和去重处理，用于改善较差网络下的丢包影响
+- 控制帧和小包会做最小长度填充，业务数据发送带轻微 pacing，减少过于突兀的包长和发送节奏
