@@ -21,10 +21,6 @@ const (
 	protocolVersion = 1
 	rtpHeaderSize   = 12
 	rtpPayloadType  = 96
-	rtpClockRate    = 90000
-
-	rtpTimestampStepMs = 20
-	rtpTimestampStep   = uint32((rtpClockRate * rtpTimestampStepMs) / 1000)
 
 	wireTypeHello    = 1
 	wireTypeHelloAck = 2
@@ -54,12 +50,8 @@ var (
 )
 
 type rtpState struct {
-	mu        sync.Mutex
-	seq       uint16
-	baseTS    uint32
-	startTime time.Time
-	ssrc      uint32
-	rng       *mrand.Rand
+	mu  sync.Mutex
+	rng *mrand.Rand
 }
 
 type helloPacket struct {
@@ -81,11 +73,7 @@ func newRTPState() (*rtpState, error) {
 	}
 	rng := mrand.New(mrand.NewSource(seed ^ time.Now().UnixNano()))
 	return &rtpState{
-		seq:       uint16(rng.Uint32()),
-		baseTS:    rng.Uint32(),
-		startTime: time.Now(),
-		ssrc:      rng.Uint32(),
-		rng:       rng,
+		rng: rng,
 	}, nil
 }
 
@@ -103,11 +91,9 @@ func (r *rtpState) nextHeader(marker bool, padded bool) []byte {
 		pt |= 0x80
 	}
 	header[1] = pt
-	binary.BigEndian.PutUint16(header[2:4], r.seq)
-	elapsedSteps := uint32(time.Since(r.startTime) / (rtpTimestampStepMs * time.Millisecond))
-	binary.BigEndian.PutUint32(header[4:8], r.baseTS+elapsedSteps*rtpTimestampStep)
-	binary.BigEndian.PutUint32(header[8:12], r.ssrc)
-	r.seq++
+	binary.BigEndian.PutUint16(header[2:4], uint16(r.rng.Uint32()))
+	binary.BigEndian.PutUint32(header[4:8], r.rng.Uint32())
+	binary.BigEndian.PutUint32(header[8:12], r.rng.Uint32())
 	return header
 }
 
