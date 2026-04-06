@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	mrand "math/rand"
 	"net"
 	"sync"
 	"time"
@@ -50,8 +49,11 @@ var (
 )
 
 type rtpState struct {
-	mu  sync.Mutex
-	rng *mrand.Rand
+	mu        sync.Mutex
+	seq       uint16
+	ts        uint32
+	ssrc      uint32
+	clockRate uint32
 }
 
 type helloPacket struct {
@@ -67,17 +69,22 @@ type frameHeader struct {
 }
 
 func newRTPState() (*rtpState, error) {
-	var seed int64
-	if err := binary.Read(rand.Reader, binary.BigEndian, &seed); err != nil {
+	var ssrc uint32
+	if err := binary.Read(rand.Reader, binary.BigEndian, &ssrc); err != nil {
 		return nil, err
 	}
-	rng := mrand.New(mrand.NewSource(seed ^ time.Now().UnixNano()))
+	if ssrc == 0 {
+		ssrc = 1
+	}
 	return &rtpState{
-		rng: rng,
+		seq:       uint16(mustRandomUint32()),
+		ts:        0,
+		ssrc:      ssrc,
+		clockRate: 8000,
 	}, nil
 }
 
-func (r *rtpState) nextHeader(marker bool, padded bool) []byte {
+func (r *rtpState) nextHeader(marker bool, padded bool, payloadLen int) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -91,9 +98,17 @@ func (r *rtpState) nextHeader(marker bool, padded bool) []byte {
 		pt |= 0x80
 	}
 	header[1] = pt
-	binary.BigEndian.PutUint16(header[2:4], uint16(r.rng.Uint32()))
-	binary.BigEndian.PutUint32(header[4:8], r.rng.Uint32())
-	binary.BigEndian.PutUint32(header[8:12], r.rng.Uint32())
+	binary.BigEndian.PutUint16(header[2:4], r.seq)
+	binary.BigEndian.PutUint32(header[4:8], r.ts)
+	binary.BigEndian.PutUint32(header[8:12], r.ssrc)
+
+	r.seq++
+	samples := uint32(payloadLen)
+	if samples == 0 {
+		samples = 160
+	}
+	r.ts += samples * r.clockRate / 8000
+
 	return header
 }
 
@@ -107,7 +122,7 @@ func wrapRTP(rtp *rtpState, marker bool, payload []byte, padTo int) []byte {
 		}
 		padded = true
 	}
-	header := rtp.nextHeader(marker, padded)
+	header := rtp.nextHeader(marker, padded, len(payload))
 	packet := make([]byte, len(header)+len(payload)+paddingLen)
 	copy(packet, header)
 	copy(packet[len(header):], payload)
